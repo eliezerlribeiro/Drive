@@ -43,7 +43,7 @@ class Produtor(threading.Thread):
 
 class Consumidor(threading.Thread):
 	"""docstring for Produtor"""
-	def __init__(self, idp, drive, contador, fila, fila_locker, contador_locker):
+	def __init__(self, idp, drive, contador, fila, fila_locker, contador_locker, fila_conc, fila_conc_locker):
 		threading.Thread.__init__(self)
 		self.idp = idp
 		self.drive = drive
@@ -51,6 +51,9 @@ class Consumidor(threading.Thread):
 		self.fila = fila
 		self.fila_locker = fila_locker
 		self.contador_locker = contador_locker
+		self.fila_conc = fila_conc
+		self.fila_conc_locker = fila_conc_locker
+
 		self.working_on = ''
 
 		print 'Criado: Consumidor ' + str(self.idp)
@@ -91,6 +94,7 @@ class Consumidor(threading.Thread):
 
 					self.contador.SetContentString(str(restantes - 1))
 					self.contador.Upload()
+
 				else:
 					# print 'Consumidor ' + str(self.idp) + ' liberando lista'
 					self.fila_locker.release()
@@ -129,52 +133,117 @@ class Consumidor(threading.Thread):
 
 			 		file.SetContentString(content)
 
-					file['title'] = file['title'] + "_"
+					file_name = file['title'] + "_"
+					file['title'] = file_name 
 					file.Upload()
+
+					self.fila_conc_locker.acquire()
+					self.fila_conc.SetContentString(self.fila_conc.GetContentString() + file_name + ' ')
+					self.fila_conc.Upload()
+					self.fila_conc_locker.release()
+					
 
 
 class Concatenador(threading.Thread):
 	"""docstring for Produtor"""
-	def __init__(self, drive):
+	def __init__(self, drive, concatenador, fila_conc, fila_conc_locker, cont_conc, cont_conc_locker):
 		threading.Thread.__init__(self)
 		self.drive = drive
+		self.concatenador = concatenador
+		self.fila_conc = fila_conc
+		self.fila_conc_locker = fila_conc_locker
+		self.cont_conc = cont_conc
+		self.cont_conc_locker = cont_conc_locker
+		print 'Criado: Concatenador'
 
 	def run(self):
 
-		final_file = self.drive.CreateFile({'title': 'Concatenado.txt'})
-		final_file.Upload()
+		while(True):
+			# print 'Consumidor ' + str(self.idp) + ' requisitando contador'
+			self.cont_conc_locker.acquire()
+			# print 'Consumidor ' + str(self.idp) + ' adquiriu contador'
 
-		file_list = self.drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
+			restantes = int(self.cont_conc.GetContentString())
 
-		for file1 in file_list:
+			if restantes > 0:
+				# print 'Consumidor ' + str(self.idp) + ' requisitando lista'
+				self.fila_conc_locker.acquire()
+				# print 'Consumidor ' + str(self.idp) + ' adquiriu lista'
+				arquivos = self.fila_conc.GetContentString().split(' ')[:-1]
+				# print arquivos 
+				if len(arquivos) > 1:
+					self.working_on = arquivos[1]
+					print "Concatenador working on: " + self.working_on
 
-			if file1['title'][-1] == '_':
-		 		# print('title: %s, id: %s' % (file1['title'], file1.GetContentString()))
+					content = ' '
 
-		 		numbers = file1.GetContentString().split(' ')[:-1]
-		 		
-		 		file_content = [ int(n) for n in numbers]
+					for i in arquivos[2:]:
+			 			content += i + ' '
 
-		 		old = final_file.GetContentString().split(' ')[:-1]
+			 		# print "Nova fila: " + content
 
-		 		old_int = [ int(n) for n in old]
+			 		self.fila_conc.SetContentString(content)
+			 		self.fila_conc.Upload()
+					# print 'Consumidor ' + str(self.idp) + ' liberando lista'
+					self.fila_conc_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou lista'
 
-		 		sorted_file = np.sort(file_content + old_int)
+					print 'Arquivo ' + self.working_on + ' consumido pelo Concatenador'
 
-		 		content = ''
+					self.cont_conc.SetContentString(str(restantes - 1))
+					self.cont_conc.Upload()
 
-		 		for i in sorted_file:
-		 			content += str(i) + ' '
+				else:
+					# print 'Consumidor ' + str(self.idp) + ' liberando lista'
+					self.fila_conc_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou lista'
+					# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+					self.cont_conc_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou contador'
+					continue
 
-		 		file1.Delete()
+			else:
+				# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+				self.cont_conc_locker.release()
+				# print 'Consumidor ' + str(self.idp) + ' liberou contador'
+				print 'Morto: Concatenador'
+				break
+			
+			# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+			self.cont_conc_locker.release()
+			# print 'Consumidor ' + str(self.idp) + ' liberou contador'
 
-		 		final_file.SetContentString(content)
+			files = self.drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
 
-				final_file.Upload()
+			for file in files:
+				if file['title'] == self.working_on:
 
+					numbers = file.GetContentString().split(' ')[:-1]
+
+					file.Delete()
+
+			 		file_content = [ int(n) for n in numbers]
+
+			 		numbers2 = self.concatenador.GetContentString().split(' ')[:-1]
+
+			 		file_concat = [ int(n) for n in numbers2]
+
+			 		sorted_file = np.sort(file_content + file_concat)
+
+			 		content = ''
+
+			 		for i in sorted_file:
+			 			content += str(i) + ' '
+
+			 		self.concatenador.SetContentString(content)
+					self.concatenador.Upload()
 
 
 def main(argv):
+
+	if len(argv) < 5:
+		print 'Usage: python main.py {Nuero de produtores} {Numero de consumidores} {Numero de arquivos por produtor} {Tamanho de cada arquivo}'
+		sys.exit(0)
 
 	n_produtores = int(argv[1])
 	n_consumidores = int(argv[2])
@@ -183,10 +252,15 @@ def main(argv):
 
 	fila_locker = threading.Lock()
 	contador_locker = threading.Lock()
+	fila_conc_locker = threading.Lock()
+	cont_conc_locker = threading.Lock()
 
 	gauth = GoogleAuth()
 	gauth.LocalWebserverAuth() # Creates local webserver and auto handles authentication.
 	drive = GoogleDrive(gauth)
+
+	conc_file = drive.CreateFile({'title': 'Arquivo Final.txt'})
+	conc_file.Upload()
 
 	contador = drive.CreateFile({'title': 'Contador.txt'})
 	contador.SetContentString(str(n_files*n_produtores))
@@ -196,8 +270,18 @@ def main(argv):
 	fila.SetContentString(' ')
 	fila.Upload()
 
+	cont_conc = drive.CreateFile({'title': 'Contador_Concatenador.txt'})
+	cont_conc.SetContentString(str(n_files*n_produtores))
+	cont_conc.Upload()
+
+	fila_conc = drive.CreateFile({'title': 'Fila_Concatenador.txt'})
+	fila_conc.SetContentString(' ')
+	fila_conc.Upload()
+
+
 	produtores = []
 	consumidores = []
+	concatenador = None
 
 	try:
 		for x in range(n_produtores):
@@ -205,8 +289,11 @@ def main(argv):
 			produtores[x].start()
 
 		for x in xrange(n_consumidores):
-			consumidores.append(Consumidor(x, drive, contador, fila, fila_locker, contador_locker))
+			consumidores.append(Consumidor(x, drive, contador, fila, fila_locker, contador_locker, fila_conc, fila_conc_locker))
 			consumidores[x].start()
+
+		concatenador = Concatenador(drive, conc_file, fila_conc, fila_conc_locker, cont_conc, cont_conc_locker)
+		concatenador.start()
 	except:
 		print 'Unable to start Thread' 
 
@@ -215,6 +302,13 @@ def main(argv):
 
 	for x in range(n_consumidores):
 		consumidores[x].join()
+
+	concatenador.join()
+
+	fila.Delete()
+	contador.Delete()
+	fila_conc.Delete()
+	cont_conc.Delete()
 
 	print 'FIM'
 
