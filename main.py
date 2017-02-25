@@ -7,7 +7,7 @@ import threading
 
 class Produtor(threading.Thread):
 	"""docstring for Produtor"""
-	def __init__(self, idp, n_files, size_file, drive, contador, fila):
+	def __init__(self, idp, n_files, size_file, drive, contador, fila, fila_locker):
 		threading.Thread.__init__(self)
 		self.idp = idp
 		self.n_files = n_files
@@ -15,6 +15,8 @@ class Produtor(threading.Thread):
 		self.drive = drive
 		self.contador = contador
 		self.fila = fila
+		self.fila_locker = fila_locker
+		print 'Criado: Produtor ' + str(self.idp)
 		# self.http = self.drive.auth.Get_Http_Object()
 
 	def run(self):
@@ -23,42 +25,113 @@ class Produtor(threading.Thread):
 			file = self.drive.CreateFile({'title': file_name})  # Create GoogleDriveFile instance with title 'Hello.txt'.
 			content = ''
 			for y in range(self.size_file):
-				content += str(np.random.randint(0, sys.maxint)) + " "
+				content += str(np.random.randint(0, 1000)) + " "
+				# content += str(np.random.randint(0, sys.maxint)) + " "
 
 			file.SetContentString(content) # Set content of the file from given string.
 			file.Upload()
-			self.fila.SetContentString(self.fila.GetContentString() + ' ' + file_name)
+			print 'Criado arquivo: ' + file_name
+			# print 'Produtor ' + str(self.idp) + ' requisitando lista'
+			self.fila_locker.acquire()
+			# print 'Produtor ' + str(self.idp) + ' adquiriu lista'
+			self.fila.SetContentString(self.fila.GetContentString() + file_name + ' ')
 			self.fila.Upload()
+			# print 'Produtor ' + str(self.idp) + ' liberando lista'
+			self.fila_locker.release()
+			# print 'Produtor ' + str(self.idp) + ' liberou lista'
+		print 'Morto: Produtor ' + str(self.idp)
 
 class Consumidor(threading.Thread):
 	"""docstring for Produtor"""
-	def __init__(self, drive):
+	def __init__(self, idp, drive, contador, fila, fila_locker, contador_locker):
 		threading.Thread.__init__(self)
+		self.idp = idp
 		self.drive = drive
+		self.contador = contador
+		self.fila = fila
+		self.fila_locker = fila_locker
+		self.contador_locker = contador_locker
+		self.working_on = ''
+
+		print 'Criado: Consumidor ' + str(self.idp)
 
 	def run(self):
-		file_list = self.drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
-		for file1 in file_list:
 
-			if file1['title'][-1] != '_':
-		 		# print('title: %s, id: %s' % (file1['title'], file1.GetContentString()))
+		while(True):
+			# print 'Consumidor ' + str(self.idp) + ' requisitando contador'
+			self.contador_locker.acquire()
+			# print 'Consumidor ' + str(self.idp) + ' adquiriu contador'
 
-		 		numbers = file1.GetContentString().split(' ')[:-1]
+			restantes = int(self.contador.GetContentString())
 
-		 		file_content = [ int(n) for n in numbers]
+			if restantes > 0:
+				# print 'Consumidor ' + str(self.idp) + ' requisitando lista'
+				self.fila_locker.acquire()
+				# print 'Consumidor ' + str(self.idp) + ' adquiriu lista'
+				arquivos = self.fila.GetContentString().split(' ')[:-1]
+				# print arquivos 
+				if len(arquivos) > 1:
+					self.working_on = arquivos[1]
+					print "Consumidor " + str(self.idp) + " Working on: " + self.working_on
 
-		 		sorted_file = np.sort(file_content)
+					content = ' '
 
-		 		content = ''
+					for i in arquivos[2:]:
+			 			content += i + ' '
 
-		 		for i in sorted_file:
-		 			content += str(i) + ' '
+			 		# print "Nova fila: " + content
 
-		 		print content
-		 		file1.SetContentString(content)
+			 		self.fila.SetContentString(content)
+			 		self.fila.Upload()
+					# print 'Consumidor ' + str(self.idp) + ' liberando lista'
+					self.fila_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou lista'
 
-				file1['title'] = file1['title'] + "_"
-				file1.Upload()
+					print 'Arquivo ' + self.working_on + ' consumido por Consumidor: ' + str(self.idp)
+
+					self.contador.SetContentString(str(restantes - 1))
+					self.contador.Upload()
+				else:
+					# print 'Consumidor ' + str(self.idp) + ' liberando lista'
+					self.fila_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou lista'
+					# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+					self.contador_locker.release()
+					# print 'Consumidor ' + str(self.idp) + ' liberou contador'
+					continue
+
+			else:
+				# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+				self.contador_locker.release()
+				# print 'Consumidor ' + str(self.idp) + ' liberou contador'
+				print 'Morto: Consumidor ' + str(self.idp)
+				break
+			
+			# print 'Consumidor ' + str(self.idp) + ' liberando contador'
+			self.contador_locker.release()
+			# print 'Consumidor ' + str(self.idp) + ' liberou contador'
+
+			files = self.drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
+
+			for file in files:
+				if file['title'] == self.working_on:
+
+					numbers = file.GetContentString().split(' ')[:-1]
+
+			 		file_content = [ int(n) for n in numbers]
+
+			 		sorted_file = np.sort(file_content)
+
+			 		content = ''
+
+			 		for i in sorted_file:
+			 			content += str(i) + ' '
+
+			 		file.SetContentString(content)
+
+					file['title'] = file['title'] + "_"
+					file.Upload()
+
 
 class Concatenador(threading.Thread):
 	"""docstring for Produtor"""
@@ -68,10 +141,10 @@ class Concatenador(threading.Thread):
 
 	def run(self):
 
-		final_file = drive.CreateFile({'title': 'Concatenado.txt'})
+		final_file = self.drive.CreateFile({'title': 'Concatenado.txt'})
 		final_file.Upload()
 
-		file_list = drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
+		file_list = self.drive.ListFile({'q': "'root' in parents and trashed=false"}).GetList()
 
 		for file1 in file_list:
 
@@ -108,6 +181,9 @@ def main(argv):
 	n_files = int(argv[3])
 	file_size = int(argv[4])
 
+	fila_locker = threading.Lock()
+	contador_locker = threading.Lock()
+
 	gauth = GoogleAuth()
 	gauth.LocalWebserverAuth() # Creates local webserver and auto handles authentication.
 	drive = GoogleDrive(gauth)
@@ -117,20 +193,28 @@ def main(argv):
 	contador.Upload()
 
 	fila = drive.CreateFile({'title': 'Fila.txt'})
+	fila.SetContentString(' ')
 	fila.Upload()
 
 	produtores = []
+	consumidores = []
 
 	try:
 		for x in range(n_produtores):
-			produtores.append(Produtor(x, n_files, file_size, drive, contador, fila))
+			produtores.append(Produtor(x, n_files, file_size, drive, contador, fila, fila_locker))
 			produtores[x].start()
+
+		for x in xrange(n_consumidores):
+			consumidores.append(Consumidor(x, drive, contador, fila, fila_locker, contador_locker))
+			consumidores[x].start()
 	except:
 		print 'Unable to start Thread' 
 
-
 	for x in range(n_produtores):
 		produtores[x].join()
+
+	for x in range(n_consumidores):
+		consumidores[x].join()
 
 	print 'FIM'
 
